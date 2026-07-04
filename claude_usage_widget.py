@@ -448,21 +448,66 @@ class UsageWidget:
                 self._rebuild_detail()
 
 
+class Poller:
+    """背景スレッドでfetchし、結果をtkのafterでUIスレッドに反映する。"""
+
+    def __init__(self, root: tk.Tk, widget: UsageWidget):
+        self.root = root
+        self.widget = widget
+        self._after_id: str | None = None
+
+    def start(self):
+        self.poll_now()
+
+    def reschedule(self, seconds: int):
+        if self._after_id:
+            self.root.after_cancel(self._after_id)
+        self._after_id = self.root.after(seconds * 1000, self.poll_now)
+
+    def poll_now(self):
+        threading.Thread(target=self._fetch_bg, daemon=True).start()
+        self.reschedule(int(self.widget.config.get("poll_interval_sec", 60)))
+
+    def _fetch_bg(self):
+        try:
+            creds = load_credentials()
+        except (OSError, ValueError):
+            self._ui(self.widget.set_status,
+                     "⚠ Claude Codeの認証情報が見つかりません", COLOR_CRIT)
+            return
+        now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+        if is_token_expired(creds, now_ms):
+            self._ui(self.widget.set_status,
+                     "⚠ トークン期限切れ — Claude Codeを起動してください", COLOR_WARN)
+            return
+        try:
+            data = fetch_usage(creds["accessToken"])
+        except TokenExpiredError:
+            self._ui(self.widget.set_status,
+                     "⚠ トークン期限切れ — Claude Codeを起動してください", COLOR_WARN)
+            return
+        except FetchError as e:
+            stamp = datetime.now().strftime("%H:%M")
+            self._ui(self.widget.set_status, f"更新失敗 {stamp} ({e})", FG_DIM)
+            return
+        try:
+            snap = parse_usage(data)
+        except Exception:
+            self._ui(self.widget.set_status, "レスポンス解析に失敗", FG_DIM)
+            return
+        self._ui(self.widget.apply_snapshot, snap)
+
+    def _ui(self, fn, *args):
+        self.root.after(0, fn, *args)
+
+
 def main():
     config = load_config()
     root = tk.Tk()
     widget = UsageWidget(root, config)
-
-    def initial_fetch():
-        try:
-            creds = load_credentials()
-            data = fetch_usage(creds["accessToken"])
-            snap = parse_usage(data)
-            root.after(0, widget.apply_snapshot, snap)
-        except Exception as e:
-            root.after(0, widget.set_status, f"取得失敗: {e}", COLOR_WARN)
-
-    threading.Thread(target=initial_fetch, daemon=True).start()
+    poller = Poller(root, widget)
+    widget.on_interval_changed = poller.reschedule
+    poller.start()
     root.mainloop()
 
 
