@@ -14,7 +14,9 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
+import pystray
 import requests
+from PIL import Image, ImageDraw
 
 APP_NAME = "claude-usage-widget"
 API_URL = "https://api.anthropic.com/api/oauth/usage"
@@ -501,14 +503,90 @@ class Poller:
         self.root.after(0, fn, *args)
 
 
+def worst_severity_color(snap: UsageSnapshot | None) -> str:
+    if snap is None:
+        return COLOR_NA
+    pcts = [e.percent for e in snap.limits]
+    sevs = [e.severity for e in snap.limits]
+    if "critical" in sevs or any(p >= 95 for p in pcts):
+        return COLOR_CRIT
+    if "warning" in sevs or any(p >= 80 for p in pcts):
+        return COLOR_WARN
+    return COLOR_OK
+
+
+def make_tray_image(color: str) -> Image.Image:
+    img = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
+    d = ImageDraw.Draw(img)
+    d.ellipse([8, 8, 56, 56], fill=color)
+    return img
+
+
+def setup_tray(root: tk.Tk, widget: UsageWidget, poller: Poller) -> pystray.Icon:
+    def ui(fn, *args):
+        root.after(0, fn, *args)
+
+    def toggle_visible(icon, item):
+        ui(lambda: root.deiconify() if root.state() == "withdrawn" else root.withdraw())
+
+    def toggle_topmost(icon, item):
+        def do():
+            new = not widget.config.get("always_on_top", True)
+            widget.config["always_on_top"] = new
+            root.attributes("-topmost", new)
+            save_config(widget.config)
+        ui(do)
+
+    def refresh_now(icon, item):
+        ui(poller.poll_now)
+
+    def quit_app(icon, item):
+        icon.stop()
+        ui(root.destroy)
+
+    menu = pystray.Menu(
+        pystray.MenuItem("ウィジェット表示/非表示", toggle_visible),
+        pystray.MenuItem("最前面に固定",
+                         toggle_topmost,
+                         checked=lambda item: bool(widget.config.get("always_on_top"))),
+        pystray.MenuItem("今すぐ更新", refresh_now),
+        pystray.Menu.SEPARATOR,
+        pystray.MenuItem("終了", quit_app),
+    )
+    icon = pystray.Icon(APP_NAME, make_tray_image(COLOR_NA), "Claude Usage", menu)
+    threading.Thread(target=icon.run, daemon=True).start()
+    return icon
+
+
 def main():
     config = load_config()
     root = tk.Tk()
     widget = UsageWidget(root, config)
     poller = Poller(root, widget)
     widget.on_interval_changed = poller.reschedule
+    icon = setup_tray(root, widget, poller)
+
+    original_apply = widget.apply_snapshot
+
+    def apply_and_recolor(snap: UsageSnapshot):
+        original_apply(snap)
+        icon.icon = make_tray_image(worst_severity_color(snap))
+
+    widget.apply_snapshot = apply_and_recolor
+
+    original_status = widget.set_status
+
+    def status_and_gray(text: str, color: str):
+        original_status(text, color)
+        if text:  # エラー/期限切れ表示中はトレイをグレーに(仕様)
+            icon.icon = make_tray_image(COLOR_NA)
+
+    widget.set_status = status_and_gray
     poller.start()
-    root.mainloop()
+    try:
+        root.mainloop()
+    finally:
+        icon.stop()
 
 
 if __name__ == "__main__":
