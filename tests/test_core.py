@@ -5,18 +5,18 @@ from pathlib import Path
 import claude_usage_widget as w
 
 SAMPLE = {
-    "five_hour": {"utilization": 88.0, "resets_at": "2026-07-04T15:50:00.427157+00:00"},
-    "seven_day": {"utilization": 43.0, "resets_at": "2026-07-05T18:00:00.427175+00:00"},
+    "five_hour": {"utilization": 75.0, "resets_at": "2026-07-04T15:50:00.427157+00:00"},
+    "seven_day": {"utilization": 30.0, "resets_at": "2026-07-05T18:00:00.427175+00:00"},
     "extra_usage": {
-        "is_enabled": True, "monthly_limit": 4000, "used_credits": 471.0,
+        "is_enabled": True, "monthly_limit": 5000, "used_credits": 1234.0,
         "currency": "USD", "decimal_places": 2, "disabled_reason": None,
     },
     "limits": [
-        {"kind": "session", "group": "session", "percent": 88, "severity": "warning",
+        {"kind": "session", "group": "session", "percent": 75, "severity": "warning",
          "resets_at": "2026-07-04T15:50:00.427157+00:00", "scope": None, "is_active": True},
-        {"kind": "weekly_all", "group": "weekly", "percent": 43, "severity": "normal",
+        {"kind": "weekly_all", "group": "weekly", "percent": 30, "severity": "normal",
          "resets_at": "2026-07-05T18:00:00.427175+00:00", "scope": None, "is_active": False},
-        {"kind": "weekly_scoped", "group": "weekly", "percent": 12, "severity": "normal",
+        {"kind": "weekly_scoped", "group": "weekly", "percent": 20, "severity": "normal",
          "resets_at": "2026-07-05T18:00:00.427394+00:00",
          "scope": {"model": {"id": None, "display_name": "Fable"}, "surface": None},
          "is_active": False},
@@ -26,24 +26,24 @@ SAMPLE = {
 
 def test_parse_usage_main_bars():
     s = w.parse_usage(SAMPLE)
-    assert s.five_hour_pct == 88.0
-    assert s.seven_day_pct == 43.0
+    assert s.five_hour_pct == 75.0
+    assert s.seven_day_pct == 30.0
     assert s.five_hour_resets.hour == 15 and s.five_hour_resets.tzinfo is not None
 
 
 def test_parse_usage_extra_credits_minor_units():
     s = w.parse_usage(SAMPLE)
     assert s.extra_enabled is True
-    assert s.extra_used == 4.71
-    assert s.extra_limit == 40.00
-    assert s.extra_remaining == 35.29
+    assert s.extra_used == 12.34
+    assert s.extra_limit == 50.00
+    assert s.extra_remaining == 37.66
 
 
 def test_parse_usage_limits_generic_labels():
     s = w.parse_usage(SAMPLE)
     labels = [e.label for e in s.limits]
     assert labels == ["5時間", "週間", "週間 (Fable)"]
-    assert s.limits[2].percent == 12
+    assert s.limits[2].percent == 20
 
 
 def test_parse_usage_missing_fields_dont_crash():

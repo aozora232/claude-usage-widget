@@ -38,3 +38,11 @@ def test_fetch_usage_network_error_raises_fetch_error():
     with mock.patch.object(w.requests, "get", side_effect=requests.ConnectionError("boom")):
         with pytest.raises(w.FetchError):
             w.fetch_usage("tok")
+
+
+def test_fetch_usage_invalid_json_raises_fetch_error():
+    r = _resp(200)
+    r.json.side_effect = ValueError("no json")
+    with mock.patch.object(w.requests, "get", return_value=r):
+        with pytest.raises(w.FetchError):
+            w.fetch_usage("tok")

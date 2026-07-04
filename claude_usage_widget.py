@@ -230,9 +230,9 @@ class _Bar:
         self.pct_label.pack(side="left")
         self._width = width
 
-    def update(self, percent: float | None, severity: str | None):
+    def update(self, percent: float | None, severity: str | None, stale: bool = False):
         self.canvas.delete("all")
-        color = bar_color(percent, severity)
+        color = COLOR_NA if stale else bar_color(percent, severity)
         if percent is not None:
             fill = max(0, min(self._width, int(self._width * percent / 100)))
             self.canvas.create_rectangle(0, 0, fill, 12, fill=color, width=0)
@@ -294,12 +294,15 @@ class UsageWidget:
     def _place_window(self):
         pos = self.config.get("window_pos")
         self.root.update_idletasks()
-        if pos and isinstance(pos, list) and len(pos) == 2:
-            self.root.geometry(f"+{int(pos[0])}+{int(pos[1])}")
-        else:
-            sw = self.root.winfo_screenwidth()
-            sh = self.root.winfo_screenheight()
-            self.root.geometry(f"+{sw - 480}+{sh - 120}")
+        try:
+            if pos and isinstance(pos, list) and len(pos) == 2:
+                self.root.geometry(f"+{int(pos[0])}+{int(pos[1])}")
+                return
+        except (ValueError, TypeError):
+            pass
+        sw = self.root.winfo_screenwidth()
+        sh = self.root.winfo_screenheight()
+        self.root.geometry(f"+{sw - 480}+{sh - 120}")
 
     # ── ドラッグ ─────────────────────────
     def _start_drag(self, e):
@@ -320,7 +323,6 @@ class UsageWidget:
     # ── 表示更新 ─────────────────────────
     def apply_snapshot(self, snap: UsageSnapshot):
         self.snapshot = snap
-        now = datetime.now().astimezone()
         self.bar_5h.update(snap.five_hour_pct, self._sev("session"))
         self.bar_week.update(snap.seven_day_pct, self._sev("weekly_all"))
         if snap.extra_enabled and snap.extra_remaining is not None:
@@ -351,8 +353,15 @@ class UsageWidget:
         if text:
             self.status_label.config(text=text, fg=color)
             self.status_label.pack(fill="x", padx=8, pady=(0, 3))
+            self._mark_stale()
         else:
             self.status_label.pack_forget()
+
+    def _mark_stale(self):
+        if self.snapshot is not None:
+            self.bar_5h.update(self.snapshot.five_hour_pct, self._sev("session"), stale=True)
+            self.bar_week.update(self.snapshot.seven_day_pct, self._sev("weekly_all"), stale=True)
+        self.extra_label.config(fg=FG_DIM)
 
     INTERVAL_CHOICES = [30, 60, 120, 300, 600]
 
@@ -381,10 +390,20 @@ class UsageWidget:
         if snap is None:
             row("データ未取得", FG_DIM)
         else:
-            for e in snap.limits:
-                color = bar_color(e.percent, e.severity)
-                row(f"{e.label}: {e.percent:.0f}%   リセット {fmt_reset(e.resets_at, now)}",
-                    color)
+            if snap.limits:
+                for e in snap.limits:
+                    color = bar_color(e.percent, e.severity)
+                    row(f"{e.label}: {e.percent:.0f}%   リセット {fmt_reset(e.resets_at, now)}",
+                        color)
+            else:
+                if snap.five_hour_pct is not None:
+                    color = bar_color(snap.five_hour_pct, None)
+                    row(f"5時間: {snap.five_hour_pct:.0f}%   "
+                        f"リセット {fmt_reset(snap.five_hour_resets, now)}", color)
+                if snap.seven_day_pct is not None:
+                    color = bar_color(snap.seven_day_pct, None)
+                    row(f"週間: {snap.seven_day_pct:.0f}%   "
+                        f"リセット {fmt_reset(snap.seven_day_resets, now)}", color)
             if (snap.extra_enabled and snap.extra_limit is not None
                     and snap.extra_used is not None
                     and snap.extra_remaining is not None):
@@ -500,13 +519,20 @@ class Poller:
         self._ui(self.widget.apply_snapshot, snap)
 
     def _ui(self, fn, *args):
-        self.root.after(0, fn, *args)
+        try:
+            self.root.after(0, fn, *args)
+        except (RuntimeError, tk.TclError):
+            pass
 
 
 def worst_severity_color(snap: UsageSnapshot | None) -> str:
     if snap is None:
         return COLOR_NA
     pcts = [e.percent for e in snap.limits]
+    if snap.five_hour_pct is not None:
+        pcts.append(snap.five_hour_pct)
+    if snap.seven_day_pct is not None:
+        pcts.append(snap.seven_day_pct)
     sevs = [e.severity for e in snap.limits]
     if "critical" in sevs or any(p >= 95 for p in pcts):
         return COLOR_CRIT
@@ -548,7 +574,7 @@ def setup_tray(root: tk.Tk, widget: UsageWidget, poller: Poller) -> pystray.Icon
         pystray.MenuItem("ウィジェット表示/非表示", toggle_visible),
         pystray.MenuItem("最前面に固定",
                          toggle_topmost,
-                         checked=lambda item: bool(widget.config.get("always_on_top"))),
+                         checked=lambda item: bool(widget.config.get("always_on_top", True))),
         pystray.MenuItem("今すぐ更新", refresh_now),
         pystray.Menu.SEPARATOR,
         pystray.MenuItem("終了", quit_app),
