@@ -326,6 +326,8 @@ class UsageWidget:
         else:
             self.extra_label.config(text="残 —", fg=FG_DIM)
         self.set_status("", FG_DIM)
+        if self.detail_visible:
+            self._rebuild_detail()
 
     def _sev(self, kind: str) -> str | None:
         if not self.snapshot:
@@ -350,8 +352,98 @@ class UsageWidget:
         else:
             self.status_label.pack_forget()
 
+    INTERVAL_CHOICES = [30, 60, 120, 300, 600]
+
     def toggle_detail(self):
-        pass  # Task 6 で実装
+        if self.detail_visible:
+            self.detail_frame.destroy()
+            self.detail_visible = False
+            self.toggle_btn.config(text="▼")
+        else:
+            self.detail_frame = tk.Frame(self.root, bg=BG)
+            self.detail_frame.pack(fill="x", padx=8, pady=(0, 6))
+            self._rebuild_detail()
+            self.detail_visible = True
+            self.toggle_btn.config(text="▲")
+
+    def _rebuild_detail(self):
+        for child in self.detail_frame.winfo_children():
+            child.destroy()
+        now = datetime.now().astimezone()
+        snap = self.snapshot
+
+        def row(text: str, fg: str = FG):
+            tk.Label(self.detail_frame, text=text, bg=BG, fg=fg, font=FONT,
+                     anchor="w").pack(fill="x")
+
+        if snap is None:
+            row("データ未取得", FG_DIM)
+        else:
+            for e in snap.limits:
+                color = bar_color(e.percent, e.severity)
+                row(f"{e.label}: {e.percent:.0f}%   リセット {fmt_reset(e.resets_at, now)}",
+                    color)
+            if snap.extra_enabled and snap.extra_limit is not None:
+                row(f"追加クレジット: ${snap.extra_used:.2f} 使用 / 上限 "
+                    f"${snap.extra_limit:.2f} (残 ${snap.extra_remaining:.2f})")
+            else:
+                row("追加クレジット: 無効", FG_DIM)
+
+        # ── APIプリペイド(手動) ─────────────
+        bal = self.config.get("prepaid_balance") or {}
+        prepaid_row = tk.Frame(self.detail_frame, bg=BG)
+        prepaid_row.pack(fill="x")
+        amount = bal.get("amount")
+        text = (f"APIプリペイド: ${amount:.2f}  最終更新 {bal.get('updated_at') or '—'}"
+                if amount is not None else "APIプリペイド: 未設定")
+        tk.Label(prepaid_row, text=text, bg=BG, fg=FG, font=FONT).pack(side="left")
+        edit = tk.Label(prepaid_row, text="[編集]", bg=BG, fg="#58a6ff", font=FONT,
+                        cursor="hand2")
+        edit.pack(side="left", padx=6)
+        edit.bind("<Button-1>", lambda e: self._edit_prepaid())
+
+        # ── ポーリング間隔 ─────────────
+        interval_row = tk.Frame(self.detail_frame, bg=BG)
+        interval_row.pack(fill="x", pady=(4, 0))
+        tk.Label(interval_row, text="更新間隔:", bg=BG, fg=FG, font=FONT).pack(side="left")
+        current = int(self.config.get("poll_interval_sec", 60))
+        var = tk.StringVar(value=self._interval_text(current))
+        menu = tk.OptionMenu(interval_row, var,
+                             *[self._interval_text(s) for s in self.INTERVAL_CHOICES],
+                             command=lambda v: self._set_interval(v))
+        menu.config(bg=BAR_BG, fg=FG, font=FONT_SMALL, highlightthickness=0, bd=0)
+        menu["menu"].config(bg=BAR_BG, fg=FG)
+        menu.pack(side="left", padx=6)
+
+    @staticmethod
+    def _interval_text(seconds: int) -> str:
+        return f"{seconds}秒" if seconds < 60 else f"{seconds // 60}分"
+
+    def _set_interval(self, label: str):
+        seconds = next(s for s in self.INTERVAL_CHOICES
+                       if self._interval_text(s) == label)
+        self.config["poll_interval_sec"] = seconds
+        save_config(self.config)
+        self.on_interval_changed(seconds)
+
+    def on_interval_changed(self, seconds: int):
+        pass  # Task 7 でポーリング再スケジュールに差し替え
+
+    def _edit_prepaid(self):
+        from tkinter import simpledialog
+        bal = self.config.get("prepaid_balance") or {}
+        value = simpledialog.askfloat(
+            "APIプリペイド残高", "現在の残高 (USD):",
+            initialvalue=bal.get("amount"), minvalue=0, parent=self.root)
+        if value is not None:
+            self.config["prepaid_balance"] = {
+                "amount": value, "currency": "USD",
+                "updated_at": datetime.now().strftime("%Y-%m-%d"),
+            }
+            save_config(self.config)
+            self.refresh_prepaid()
+            if self.detail_visible:
+                self._rebuild_detail()
 
 
 def main():
