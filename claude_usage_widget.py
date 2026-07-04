@@ -383,7 +383,9 @@ class UsageWidget:
                 color = bar_color(e.percent, e.severity)
                 row(f"{e.label}: {e.percent:.0f}%   リセット {fmt_reset(e.resets_at, now)}",
                     color)
-            if snap.extra_enabled and snap.extra_limit is not None:
+            if (snap.extra_enabled and snap.extra_limit is not None
+                    and snap.extra_used is not None
+                    and snap.extra_remaining is not None):
                 row(f"追加クレジット: ${snap.extra_used:.2f} 使用 / 上限 "
                     f"${snap.extra_limit:.2f} (残 ${snap.extra_remaining:.2f})")
             else:
