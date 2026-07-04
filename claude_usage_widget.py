@@ -12,6 +12,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
+import requests
+
 APP_NAME = "claude-usage-widget"
 API_URL = "https://api.anthropic.com/api/oauth/usage"
 CREDENTIALS_PATH = Path.home() / ".claude" / ".credentials.json"
@@ -22,6 +24,34 @@ COLOR_CRIT = "#f85149"
 COLOR_NA = "#8b949e"
 
 _KIND_LABELS = {"session": "5時間", "weekly_all": "週間"}
+
+
+class TokenExpiredError(Exception):
+    pass
+
+
+class FetchError(Exception):
+    pass
+
+
+def fetch_usage(token: str, timeout: float = 10) -> dict:
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "anthropic-beta": "oauth-2025-04-20",
+        "Content-Type": "application/json",
+    }
+    try:
+        resp = requests.get(API_URL, headers=headers, timeout=timeout)
+    except requests.RequestException as e:
+        raise FetchError(f"network error: {e}") from e
+    if resp.status_code == 401:
+        raise TokenExpiredError("access token rejected (401)")
+    if resp.status_code != 200:
+        raise FetchError(f"HTTP {resp.status_code}")
+    try:
+        return resp.json()
+    except ValueError as e:
+        raise FetchError("invalid JSON response") from e
 
 
 @dataclass
