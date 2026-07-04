@@ -8,6 +8,8 @@ from __future__ import annotations
 import copy
 import json
 import os
+import threading
+import tkinter as tk
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -202,3 +204,173 @@ def save_config(cfg: dict, path: Path | None = None) -> None:
     path = path or config_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+BG = "#1c2128"
+FG = "#e6edf3"
+FG_DIM = "#8b949e"
+BAR_BG = "#30363d"
+FONT = ("Yu Gothic UI", 9)
+FONT_SMALL = ("Yu Gothic UI", 8)
+
+
+class _Bar:
+    """ラベル+横バー+%表示のひとかたまり。"""
+
+    def __init__(self, parent: tk.Widget, label: str, width: int = 80):
+        self.frame = tk.Frame(parent, bg=BG)
+        tk.Label(self.frame, text=label, bg=BG, fg=FG, font=FONT).pack(side="left")
+        self.canvas = tk.Canvas(self.frame, width=width, height=12, bg=BAR_BG,
+                                highlightthickness=0)
+        self.canvas.pack(side="left", padx=(4, 4), pady=2)
+        self.pct_label = tk.Label(self.frame, text="—", bg=BG, fg=FG, font=FONT, width=4,
+                                  anchor="w")
+        self.pct_label.pack(side="left")
+        self._width = width
+
+    def update(self, percent: float | None, severity: str | None):
+        self.canvas.delete("all")
+        color = bar_color(percent, severity)
+        if percent is not None:
+            fill = max(0, min(self._width, int(self._width * percent / 100)))
+            self.canvas.create_rectangle(0, 0, fill, 12, fill=color, width=0)
+            self.pct_label.config(text=f"{percent:.0f}%", fg=color)
+        else:
+            self.pct_label.config(text="—", fg=FG_DIM)
+
+
+class UsageWidget:
+    def __init__(self, root: tk.Tk, config: dict):
+        self.root = root
+        self.config = config
+        self.detail_visible = False
+        self.snapshot: UsageSnapshot | None = None
+
+        root.overrideredirect(True)
+        root.configure(bg=BG)
+        root.attributes("-topmost", bool(config.get("always_on_top", True)))
+
+        # ── スリムバー(1行) ─────────────────────────
+        self.bar_row = tk.Frame(root, bg=BG)
+        self.bar_row.pack(fill="x", padx=8, pady=4)
+
+        self.bar_5h = _Bar(self.bar_row, "5h")
+        self.bar_5h.frame.pack(side="left")
+        self._sep()
+        self.bar_week = _Bar(self.bar_row, "週")
+        self.bar_week.frame.pack(side="left")
+        self._sep()
+        self.extra_label = tk.Label(self.bar_row, text="残 —", bg=BG, fg=FG, font=FONT)
+        self.extra_label.pack(side="left")
+        self._sep()
+        self.prepaid_label = tk.Label(self.bar_row, text="API —", bg=BG, fg=FG, font=FONT)
+        self.prepaid_label.pack(side="left")
+
+        self.toggle_btn = tk.Label(self.bar_row, text="▼", bg=BG, fg=FG_DIM, font=FONT,
+                                   cursor="hand2")
+        self.toggle_btn.pack(side="right", padx=(6, 0))
+        self.toggle_btn.bind("<Button-1>", lambda e: self.toggle_detail())
+
+        # ステータス行(エラー時のみ文字が入る)
+        self.status_label = tk.Label(root, text="", bg=BG, fg=FG_DIM, font=FONT_SMALL,
+                                     anchor="w")
+
+        # ── ドラッグ移動 ─────────────────────────
+        for widget in (root, self.bar_row):
+            widget.bind("<Button-1>", self._start_drag)
+            widget.bind("<B1-Motion>", self._on_drag)
+            widget.bind("<ButtonRelease-1>", self._end_drag)
+        self._drag_offset = None
+
+        self._place_window()
+        self.refresh_prepaid()
+
+    def _sep(self):
+        tk.Label(self.bar_row, text="│", bg=BG, fg=BAR_BG, font=FONT).pack(side="left",
+                                                                            padx=4)
+
+    def _place_window(self):
+        pos = self.config.get("window_pos")
+        self.root.update_idletasks()
+        if pos and isinstance(pos, list) and len(pos) == 2:
+            self.root.geometry(f"+{int(pos[0])}+{int(pos[1])}")
+        else:
+            sw = self.root.winfo_screenwidth()
+            sh = self.root.winfo_screenheight()
+            self.root.geometry(f"+{sw - 480}+{sh - 120}")
+
+    # ── ドラッグ ─────────────────────────
+    def _start_drag(self, e):
+        self._drag_offset = (e.x_root - self.root.winfo_x(),
+                             e.y_root - self.root.winfo_y())
+
+    def _on_drag(self, e):
+        if self._drag_offset:
+            self.root.geometry(f"+{e.x_root - self._drag_offset[0]}"
+                               f"+{e.y_root - self._drag_offset[1]}")
+
+    def _end_drag(self, e):
+        if self._drag_offset:
+            self.config["window_pos"] = [self.root.winfo_x(), self.root.winfo_y()]
+            save_config(self.config)
+        self._drag_offset = None
+
+    # ── 表示更新 ─────────────────────────
+    def apply_snapshot(self, snap: UsageSnapshot):
+        self.snapshot = snap
+        now = datetime.now().astimezone()
+        self.bar_5h.update(snap.five_hour_pct, self._sev("session"))
+        self.bar_week.update(snap.seven_day_pct, self._sev("weekly_all"))
+        if snap.extra_enabled and snap.extra_remaining is not None:
+            self.extra_label.config(text=f"残 ${snap.extra_remaining:.2f}", fg=FG)
+        else:
+            self.extra_label.config(text="残 —", fg=FG_DIM)
+        self.set_status("", FG_DIM)
+
+    def _sev(self, kind: str) -> str | None:
+        if not self.snapshot:
+            return None
+        for e in self.snapshot.limits:
+            if e.kind == kind:
+                return e.severity
+        return None
+
+    def refresh_prepaid(self):
+        bal = self.config.get("prepaid_balance") or {}
+        amount = bal.get("amount")
+        if amount is None:
+            self.prepaid_label.config(text="API —", fg=FG_DIM)
+        else:
+            self.prepaid_label.config(text=f"API ${amount:.2f}", fg=FG)
+
+    def set_status(self, text: str, color: str):
+        if text:
+            self.status_label.config(text=text, fg=color)
+            self.status_label.pack(fill="x", padx=8, pady=(0, 3))
+        else:
+            self.status_label.pack_forget()
+
+    def toggle_detail(self):
+        pass  # Task 6 で実装
+
+
+def main():
+    config = load_config()
+    root = tk.Tk()
+    widget = UsageWidget(root, config)
+
+    def initial_fetch():
+        try:
+            creds = load_credentials()
+            data = fetch_usage(creds["accessToken"])
+            snap = parse_usage(data)
+            root.after(0, widget.apply_snapshot, snap)
+        except Exception as e:
+            root.after(0, widget.set_status, f"取得失敗: {e}", COLOR_WARN)
+
+    threading.Thread(target=initial_fetch, daemon=True).start()
+    root.mainloop()
+
+
+if __name__ == "__main__":
+    main()
