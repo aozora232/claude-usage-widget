@@ -2,6 +2,8 @@ import json
 from datetime import datetime, timezone
 from pathlib import Path
 
+import pytest
+
 import claude_usage_widget as w
 
 SAMPLE = {
@@ -83,3 +85,21 @@ def test_fmt_reset():
     assert w.fmt_reset(same_day, now) == "15:50"
     assert w.fmt_reset(other_day, now) == "7/5 18:00"
     assert w.fmt_reset(None, now) == "—"
+
+
+def test_extra_percent_normal():
+    s = w.parse_usage(SAMPLE)  # used=12.34, limit=50.00
+    assert w.extra_percent(s) == pytest.approx(24.68)
+
+
+def test_extra_percent_disabled_or_missing():
+    assert w.extra_percent(w.UsageSnapshot()) is None
+    assert w.extra_percent(w.UsageSnapshot(
+        extra_enabled=True, extra_used=1.0, extra_limit=None)) is None
+    assert w.extra_percent(w.UsageSnapshot(
+        extra_enabled=True, extra_used=None, extra_limit=10.0)) is None
+
+
+def test_extra_percent_zero_limit():
+    assert w.extra_percent(w.UsageSnapshot(
+        extra_enabled=True, extra_used=0.0, extra_limit=0.0)) is None

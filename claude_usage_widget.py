@@ -166,6 +166,17 @@ def bar_color(percent: float | None, severity: str | None) -> str:
     return COLOR_OK
 
 
+def extra_percent(snap: UsageSnapshot) -> float | None:
+    """追加クレジット使用率(月間制限=100%)。表示不能ならNone。"""
+    if not snap.extra_enabled:
+        return None
+    if snap.extra_used is None or snap.extra_limit is None:
+        return None
+    if snap.extra_limit <= 0:
+        return None
+    return snap.extra_used / snap.extra_limit * 100
+
+
 def fmt_reset(dt: datetime | None, now: datetime) -> str:
     if dt is None:
         return "—"
