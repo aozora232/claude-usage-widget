@@ -227,7 +227,8 @@ FONT = ("Yu Gothic UI", 9)
 FONT_SMALL = ("Yu Gothic UI", 8)
 
 
-BAR_HEIGHT = 8  # スリムバーのCanvas高さ(px)
+BAR_HEIGHT = 8   # スリムバーのCanvas高さ(px)
+ICON_SIZE = 12   # ⟳▼アイコンのCanvas一辺(px)。行の高さはこれが上限になる
 
 
 class _Bar:
@@ -260,7 +261,7 @@ class UsageWidget:
 
         # ── スリムバー(バーのみ・文字なし) ─────────────
         self.bar_row = tk.Frame(root, bg=BG)
-        self.bar_row.pack(fill="x", padx=8, pady=2)
+        self.bar_row.pack(fill="x", padx=8, pady=0)
 
         self.bar_5h = _Bar(self.bar_row)
         self.bar_5h.canvas.pack(side="left")
@@ -269,15 +270,17 @@ class UsageWidget:
         self.bar_extra = _Bar(self.bar_row)
         self.bar_extra.canvas.pack(side="left", padx=(6, 0))
 
-        self.toggle_btn = tk.Label(self.bar_row, text="▼", bg=BG, fg=FG_DIM,
-                                   font=FONT_SMALL, cursor="hand2", pady=0)
+        self.toggle_btn = tk.Canvas(self.bar_row, width=ICON_SIZE, height=ICON_SIZE,
+                                    bg=BG, highlightthickness=0, cursor="hand2")
         self.toggle_btn.pack(side="right", padx=(6, 0))
         self.toggle_btn.bind("<Button-1>", lambda e: self.toggle_detail())
+        self._draw_toggle_icon(expanded=False)
 
-        self.refresh_btn = tk.Label(self.bar_row, text="⟳", bg=BG, fg=FG_DIM,
-                                    font=FONT_SMALL, cursor="hand2", pady=0)
+        self.refresh_btn = tk.Canvas(self.bar_row, width=ICON_SIZE, height=ICON_SIZE,
+                                     bg=BG, highlightthickness=0, cursor="hand2")
         self.refresh_btn.pack(side="right", padx=(6, 0))
         self.refresh_btn.bind("<Button-1>", lambda e: self.on_refresh_clicked())
+        self._draw_refresh_icon(busy=False)
 
         # ステータス行(エラー時のみ文字が入る)
         self.status_label = tk.Label(root, text="", bg=BG, fg=FG_DIM, font=FONT_SMALL,
@@ -354,8 +357,22 @@ class UsageWidget:
                                  stale=True)
             self.bar_extra.update(extra_percent(self.snapshot), None, stale=True)
 
+    def _draw_toggle_icon(self, expanded: bool):
+        c = self.toggle_btn
+        c.delete("all")
+        pts = (2, 9, 10, 9, 6, 4) if expanded else (2, 4, 10, 4, 6, 9)
+        c.create_polygon(*pts, fill=FG_DIM, outline="")
+
+    def _draw_refresh_icon(self, busy: bool):
+        c = self.refresh_btn
+        c.delete("all")
+        color = BAR_BG if busy else FG_DIM
+        c.create_arc(2, 3, 10, 11, start=40, extent=260, style="arc",
+                     outline=color, width=2)
+        c.create_polygon(8, 0, 12, 3, 8, 6, fill=color, outline="")
+
     def set_refreshing(self, busy: bool):
-        self.refresh_btn.config(fg=BAR_BG if busy else FG_DIM)
+        self._draw_refresh_icon(busy)
 
     def on_refresh_clicked(self):
         pass  # main() で Poller.poll_now に差し替え
@@ -366,13 +383,13 @@ class UsageWidget:
         if self.detail_visible:
             self.detail_frame.destroy()
             self.detail_visible = False
-            self.toggle_btn.config(text="▼")
+            self._draw_toggle_icon(expanded=False)
         else:
             self.detail_frame = tk.Frame(self.root, bg=BG)
             self.detail_frame.pack(fill="x", padx=8, pady=(0, 6))
             self._rebuild_detail()
             self.detail_visible = True
-            self.toggle_btn.config(text="▲")
+            self._draw_toggle_icon(expanded=True)
 
     def _rebuild_detail(self):
         for child in self.detail_frame.winfo_children():
