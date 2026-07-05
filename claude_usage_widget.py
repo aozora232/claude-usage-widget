@@ -227,29 +227,24 @@ FONT = ("Yu Gothic UI", 9)
 FONT_SMALL = ("Yu Gothic UI", 8)
 
 
-class _Bar:
-    """ラベル+横バー+%表示のひとかたまり。"""
+BAR_HEIGHT = 8  # スリムバーのCanvas高さ(px)
 
-    def __init__(self, parent: tk.Widget, label: str, width: int = 80):
-        self.frame = tk.Frame(parent, bg=BG)
-        tk.Label(self.frame, text=label, bg=BG, fg=FG, font=FONT).pack(side="left")
-        self.canvas = tk.Canvas(self.frame, width=width, height=12, bg=BAR_BG,
+
+class _Bar:
+    """横バーのみのインジケーター(ラベル・%文字なし)。"""
+
+    def __init__(self, parent: tk.Widget, width: int = 80):
+        self.canvas = tk.Canvas(parent, width=width, height=BAR_HEIGHT, bg=BAR_BG,
                                 highlightthickness=0)
-        self.canvas.pack(side="left", padx=(4, 4), pady=2)
-        self.pct_label = tk.Label(self.frame, text="—", bg=BG, fg=FG, font=FONT, width=4,
-                                  anchor="w")
-        self.pct_label.pack(side="left")
         self._width = width
 
     def update(self, percent: float | None, severity: str | None, stale: bool = False):
         self.canvas.delete("all")
+        if percent is None:
+            return  # データなし=空バー(背景色のまま)
         color = COLOR_NA if stale else bar_color(percent, severity)
-        if percent is not None:
-            fill = max(0, min(self._width, int(self._width * percent / 100)))
-            self.canvas.create_rectangle(0, 0, fill, 12, fill=color, width=0)
-            self.pct_label.config(text=f"{percent:.0f}%", fg=color)
-        else:
-            self.pct_label.config(text="—", fg=FG_DIM)
+        fill = max(0, min(self._width, int(self._width * percent / 100)))
+        self.canvas.create_rectangle(0, 0, fill, BAR_HEIGHT, fill=color, width=0)
 
 
 class UsageWidget:
@@ -263,26 +258,26 @@ class UsageWidget:
         root.configure(bg=BG)
         root.attributes("-topmost", bool(config.get("always_on_top", True)))
 
-        # ── スリムバー(1行) ─────────────────────────
+        # ── スリムバー(バーのみ・文字なし) ─────────────
         self.bar_row = tk.Frame(root, bg=BG)
-        self.bar_row.pack(fill="x", padx=8, pady=4)
+        self.bar_row.pack(fill="x", padx=8, pady=2)
 
-        self.bar_5h = _Bar(self.bar_row, "5h")
-        self.bar_5h.frame.pack(side="left")
-        self._sep()
-        self.bar_week = _Bar(self.bar_row, "週")
-        self.bar_week.frame.pack(side="left")
-        self._sep()
-        self.extra_label = tk.Label(self.bar_row, text="残 —", bg=BG, fg=FG, font=FONT)
-        self.extra_label.pack(side="left")
-        self._sep()
-        self.prepaid_label = tk.Label(self.bar_row, text="API —", bg=BG, fg=FG, font=FONT)
-        self.prepaid_label.pack(side="left")
+        self.bar_5h = _Bar(self.bar_row)
+        self.bar_5h.canvas.pack(side="left")
+        self.bar_week = _Bar(self.bar_row)
+        self.bar_week.canvas.pack(side="left", padx=(6, 0))
+        self.bar_extra = _Bar(self.bar_row)
+        self.bar_extra.canvas.pack(side="left", padx=(6, 0))
 
-        self.toggle_btn = tk.Label(self.bar_row, text="▼", bg=BG, fg=FG_DIM, font=FONT,
-                                   cursor="hand2")
+        self.toggle_btn = tk.Label(self.bar_row, text="▼", bg=BG, fg=FG_DIM,
+                                   font=FONT_SMALL, cursor="hand2", pady=0)
         self.toggle_btn.pack(side="right", padx=(6, 0))
         self.toggle_btn.bind("<Button-1>", lambda e: self.toggle_detail())
+
+        self.refresh_btn = tk.Label(self.bar_row, text="⟳", bg=BG, fg=FG_DIM,
+                                    font=FONT_SMALL, cursor="hand2", pady=0)
+        self.refresh_btn.pack(side="right", padx=(6, 0))
+        self.refresh_btn.bind("<Button-1>", lambda e: self.on_refresh_clicked())
 
         # ステータス行(エラー時のみ文字が入る)
         self.status_label = tk.Label(root, text="", bg=BG, fg=FG_DIM, font=FONT_SMALL,
@@ -296,11 +291,6 @@ class UsageWidget:
         self._drag_offset = None
 
         self._place_window()
-        self.refresh_prepaid()
-
-    def _sep(self):
-        tk.Label(self.bar_row, text="│", bg=BG, fg=BAR_BG, font=FONT).pack(side="left",
-                                                                            padx=4)
 
     def _place_window(self):
         pos = self.config.get("window_pos")
@@ -336,10 +326,7 @@ class UsageWidget:
         self.snapshot = snap
         self.bar_5h.update(snap.five_hour_pct, self._sev("session"))
         self.bar_week.update(snap.seven_day_pct, self._sev("weekly_all"))
-        if snap.extra_enabled and snap.extra_remaining is not None:
-            self.extra_label.config(text=f"残 ${snap.extra_remaining:.2f}", fg=FG)
-        else:
-            self.extra_label.config(text="残 —", fg=FG_DIM)
+        self.bar_extra.update(extra_percent(snap), None)
         self.set_status("", FG_DIM)
         if self.detail_visible:
             self._rebuild_detail()
@@ -352,14 +339,6 @@ class UsageWidget:
                 return e.severity
         return None
 
-    def refresh_prepaid(self):
-        bal = self.config.get("prepaid_balance") or {}
-        amount = bal.get("amount")
-        if amount is None:
-            self.prepaid_label.config(text="API —", fg=FG_DIM)
-        else:
-            self.prepaid_label.config(text=f"API ${amount:.2f}", fg=FG)
-
     def set_status(self, text: str, color: str):
         if text:
             self.status_label.config(text=text, fg=color)
@@ -371,8 +350,15 @@ class UsageWidget:
     def _mark_stale(self):
         if self.snapshot is not None:
             self.bar_5h.update(self.snapshot.five_hour_pct, self._sev("session"), stale=True)
-            self.bar_week.update(self.snapshot.seven_day_pct, self._sev("weekly_all"), stale=True)
-        self.extra_label.config(fg=FG_DIM)
+            self.bar_week.update(self.snapshot.seven_day_pct, self._sev("weekly_all"),
+                                 stale=True)
+            self.bar_extra.update(extra_percent(self.snapshot), None, stale=True)
+
+    def set_refreshing(self, busy: bool):
+        self.refresh_btn.config(fg=BAR_BG if busy else FG_DIM)
+
+    def on_refresh_clicked(self):
+        pass  # main() で Poller.poll_now に差し替え
 
     INTERVAL_CHOICES = [30, 60, 120, 300, 600]
 
@@ -475,7 +461,6 @@ class UsageWidget:
                 "updated_at": datetime.now().strftime("%Y-%m-%d"),
             }
             save_config(self.config)
-            self.refresh_prepaid()
             if self.detail_visible:
                 self._rebuild_detail()
 
