@@ -472,6 +472,7 @@ class Poller:
         self.root = root
         self.widget = widget
         self._after_id: str | None = None
+        self._in_flight = False
 
     def start(self):
         self.poll_now()
@@ -482,10 +483,21 @@ class Poller:
         self._after_id = self.root.after(seconds * 1000, self.poll_now)
 
     def poll_now(self):
-        threading.Thread(target=self._fetch_bg, daemon=True).start()
         self.reschedule(int(self.widget.config.get("poll_interval_sec", 60)))
+        if self._in_flight:
+            return  # fetch実行中の連打・タイマー発火は無視(タイマーは再設定済み)
+        self._in_flight = True
+        self._ui(self.widget.set_refreshing, True)
+        threading.Thread(target=self._fetch_bg, daemon=True).start()
 
     def _fetch_bg(self):
+        try:
+            self._fetch_once()
+        finally:
+            self._in_flight = False
+            self._ui(self.widget.set_refreshing, False)
+
+    def _fetch_once(self):
         try:
             creds = load_credentials()
         except (OSError, ValueError):
@@ -586,6 +598,7 @@ def main():
     widget = UsageWidget(root, config)
     poller = Poller(root, widget)
     widget.on_interval_changed = poller.reschedule
+    widget.on_refresh_clicked = poller.poll_now
     icon = setup_tray(root, widget, poller)
 
     original_apply = widget.apply_snapshot
