@@ -79,6 +79,21 @@
   展開中は ▲(上向き三角形)を描画。
 - 結果: 折りたたみ高さ 21px → 12px(実測)。
 
+## 改訂2 (2026-07-06): レート制限(HTTP 429)の専用ハンドリング
+
+運用開始後、usage API が短時間の連続リクエスト(自動ポーリング+⟳手動更新)で
+HTTP 429 を返すことが判明(Retry-After ヘッダーは常に 0 で実用性なし)。
+従来は他エラーと同じ「更新失敗」扱いでバーがグレー化し、実際より深刻に見えた。
+
+- `RateLimitError(FetchError)` を追加し、`fetch_usage()` は 429 で これを送出。
+- `Poller._fetch_once` は `except RateLimitError` を `except FetchError` より先に
+  置き、`widget.set_rate_limited()` のみ通知(set_status は呼ばない=グレー化しない)。
+- `set_rate_limited()` は `_rate_limited` フラグを立てて ⟳ を COLOR_WARN(アンバー)で
+  再描画するだけ。バー・ステータス行・トレイ色には触れない(表示中の値は直前の
+  正常値のため)。高さ・幅は不変。
+- 復帰: 次の取得成功(`apply_snapshot`)または本物のエラー(`set_status` 文言あり)で
+  フラグ解除。busy(取得中の暗色)表示はフラグより優先。
+
 ## テスト
 
 - `extra_percent()` の単体テスト: 正常系(50%など)、`extra_enabled=False`、

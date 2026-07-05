@@ -23,6 +23,9 @@ class FakeWidget:
     def set_status(self, text, color):
         pass
 
+    def set_rate_limited(self):
+        pass
+
 
 class FakeThread:
     instances = []
@@ -68,6 +71,26 @@ def test_poll_now_allows_next_after_completion(monkeypatch):
     FakeThread.instances[0].target()
     p.poll_now()
     assert len(FakeThread.instances) == 2
+
+
+def _raise_rate_limit(token, timeout=10):
+    raise w.RateLimitError("rate limited (429)")
+
+
+def test_rate_limited_signals_icon_not_status(monkeypatch):
+    """429ではバーをグレー化するset_statusを呼ばず、set_rate_limitedだけを通知する。"""
+    FakeThread.instances = []
+    monkeypatch.setattr(w.threading, "Thread", FakeThread)
+    monkeypatch.setattr(w, "load_credentials",
+                        lambda: {"accessToken": "tok", "expiresAt": 2**62})
+    monkeypatch.setattr(w, "fetch_usage", _raise_rate_limit)
+    p = w.Poller(FakeRoot(), FakeWidget())
+    p.poll_now()
+    FakeThread.instances[0].target()
+    fns = [fn for ms, fn, args in p.root.after_calls if ms == 0]
+    assert p.widget.set_rate_limited in fns
+    assert p.widget.set_status not in fns
+    assert p._in_flight is False  # 通常どおり解除され、次回ポーリングで再試行できる
 
 
 def test_refresh_indicator_signals_start_and_end(monkeypatch):

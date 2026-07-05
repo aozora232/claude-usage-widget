@@ -28,6 +28,17 @@ def test_fetch_usage_401_raises_token_expired():
             w.fetch_usage("tok")
 
 
+def test_fetch_usage_429_raises_rate_limit_error():
+    with mock.patch.object(w.requests, "get", return_value=_resp(429)):
+        with pytest.raises(w.RateLimitError):
+            w.fetch_usage("tok")
+
+
+def test_rate_limit_error_is_fetch_error_subclass():
+    # 既存の except FetchError で漏れなく捕捉できること(専用exceptを先に書く前提)
+    assert issubclass(w.RateLimitError, w.FetchError)
+
+
 def test_fetch_usage_500_raises_fetch_error():
     with mock.patch.object(w.requests, "get", return_value=_resp(500)):
         with pytest.raises(w.FetchError):

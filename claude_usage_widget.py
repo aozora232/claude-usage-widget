@@ -38,6 +38,10 @@ class FetchError(Exception):
     pass
 
 
+class RateLimitError(FetchError):
+    """HTTP 429。データ異常ではなく一時的な取得拒否(表示中の値は維持してよい)。"""
+
+
 def fetch_usage(token: str, timeout: float = 10) -> dict:
     headers = {
         "Authorization": f"Bearer {token}",
@@ -50,6 +54,8 @@ def fetch_usage(token: str, timeout: float = 10) -> dict:
         raise FetchError(f"network error: {e}") from e
     if resp.status_code == 401:
         raise TokenExpiredError("access token rejected (401)")
+    if resp.status_code == 429:
+        raise RateLimitError("rate limited (429)")
     if resp.status_code != 200:
         raise FetchError(f"HTTP {resp.status_code}")
     try:
@@ -254,6 +260,7 @@ class UsageWidget:
         self.config = config
         self.detail_visible = False
         self.snapshot: UsageSnapshot | None = None
+        self._rate_limited = False
 
         root.overrideredirect(True)
         root.configure(bg=BG)
@@ -327,6 +334,7 @@ class UsageWidget:
     # ── 表示更新 ─────────────────────────
     def apply_snapshot(self, snap: UsageSnapshot):
         self.snapshot = snap
+        self._rate_limited = False
         self.bar_5h.update(snap.five_hour_pct, self._sev("session"))
         self.bar_week.update(snap.seven_day_pct, self._sev("weekly_all"))
         self.bar_extra.update(extra_percent(snap), None)
@@ -344,6 +352,7 @@ class UsageWidget:
 
     def set_status(self, text: str, color: str):
         if text:
+            self._rate_limited = False  # 本物のエラー表示が優先(グレー+文言に切替)
             self.status_label.config(text=text, fg=color)
             self.status_label.pack(fill="x", padx=8, pady=(0, 3))
             self._mark_stale()
@@ -366,13 +375,23 @@ class UsageWidget:
     def _draw_refresh_icon(self, busy: bool):
         c = self.refresh_btn
         c.delete("all")
-        color = BAR_BG if busy else FG_DIM
+        if busy:
+            color = BAR_BG
+        elif self._rate_limited:
+            color = COLOR_WARN  # レート制限中はアンバー(データは直前値のまま有効)
+        else:
+            color = FG_DIM
         c.create_arc(2, 3, 10, 11, start=40, extent=260, style="arc",
                      outline=color, width=2)
         c.create_polygon(8, 0, 12, 3, 8, 6, fill=color, outline="")
 
     def set_refreshing(self, busy: bool):
         self._draw_refresh_icon(busy)
+
+    def set_rate_limited(self):
+        """429: バー・ステータスには触れず、⟳を警告色にするだけ。"""
+        self._rate_limited = True
+        self._draw_refresh_icon(busy=False)
 
     def on_refresh_clicked(self):
         pass  # main() で Poller.poll_now に差し替え
@@ -531,6 +550,9 @@ class Poller:
         except TokenExpiredError:
             self._ui(self.widget.set_status,
                      "⚠ トークン期限切れ — Claude Codeを起動してください", COLOR_WARN)
+            return
+        except RateLimitError:
+            self._ui(self.widget.set_rate_limited)
             return
         except FetchError as e:
             stamp = datetime.now().strftime("%H:%M")
