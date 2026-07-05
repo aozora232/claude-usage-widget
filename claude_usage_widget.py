@@ -334,6 +334,7 @@ class UsageWidget:
     # ── 表示更新 ─────────────────────────
     def apply_snapshot(self, snap: UsageSnapshot):
         self.snapshot = snap
+        # ⟳の再描画はPoller側finallyのset_refreshing(False)に任せる(set_statusも同様)
         self._rate_limited = False
         self.bar_5h.update(snap.five_hour_pct, self._sev("session"))
         self.bar_week.update(snap.seven_day_pct, self._sev("weekly_all"))
