@@ -101,3 +101,25 @@ def test_refresh_indicator_signals_start_and_end(monkeypatch):
     ui_calls = [(fn, args) for ms, fn, args in p.root.after_calls if ms == 0]
     assert (widget.set_refreshing, (True,)) == ui_calls[0]
     assert (widget.set_refreshing, (False,)) == ui_calls[-1]
+
+
+def test_fetch_error_status_text_is_clipped(monkeypatch):
+    """FetchErrorの文言が想定外に長くてもset_statusに渡す文字列は上限内に収まる。"""
+    FakeThread.instances = []
+    monkeypatch.setattr(w.threading, "Thread", FakeThread)
+    monkeypatch.setattr(w, "load_credentials",
+                        lambda: {"accessToken": "tok", "expiresAt": 2**62})
+
+    def _raise_long(token, timeout=10):
+        raise w.FetchError("x" * 500)
+
+    monkeypatch.setattr(w, "fetch_usage", _raise_long)
+    p = w.Poller(FakeRoot(), FakeWidget())
+    p.poll_now()
+    FakeThread.instances[0].target()
+    status_args = [args for ms, fn, args in p.root.after_calls
+                   if ms == 0 and fn == p.widget.set_status]
+    assert status_args, "set_status should have been scheduled"
+    text = status_args[0][0]
+    assert len(text) <= w.STATUS_MAX_CHARS
+    assert text.endswith("…")

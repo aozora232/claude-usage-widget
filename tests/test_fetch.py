@@ -51,6 +51,35 @@ def test_fetch_usage_network_error_raises_fetch_error():
             w.fetch_usage("tok")
 
 
+def test_fetch_usage_connection_error_message_is_short():
+    # requestsが吐く長大な詳細(HTTPSConnectionPool… Max retries…)をUIに流さない。
+    long_detail = ("HTTPSConnectionPool(host='api.anthropic.com', port=443): "
+                   "Max retries exceeded with url: /api/oauth/usage "
+                   "(Caused by NameResolutionError(...))")
+    with mock.patch.object(w.requests, "get",
+                           side_effect=requests.ConnectionError(long_detail)):
+        with pytest.raises(w.FetchError) as ei:
+            w.fetch_usage("tok")
+    assert str(ei.value) == "接続できません"
+    assert isinstance(ei.value.__cause__, requests.ConnectionError)  # 原因は保持
+
+
+def test_fetch_usage_timeout_message_is_short():
+    with mock.patch.object(w.requests, "get",
+                           side_effect=requests.Timeout("read timed out after 10s")):
+        with pytest.raises(w.FetchError) as ei:
+            w.fetch_usage("tok")
+    assert str(ei.value) == "タイムアウト"
+
+
+def test_fetch_usage_ssl_error_message_is_short():
+    with mock.patch.object(w.requests, "get",
+                           side_effect=requests.exceptions.SSLError("cert verify failed")):
+        with pytest.raises(w.FetchError) as ei:
+            w.fetch_usage("tok")
+    assert str(ei.value) == "SSLエラー"
+
+
 def test_fetch_usage_invalid_json_raises_fetch_error():
     r = _resp(200)
     r.json.side_effect = ValueError("no json")

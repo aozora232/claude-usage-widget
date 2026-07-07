@@ -36,3 +36,10 @@ def test_rate_limited_survives_status_clear(widget):
     widget.set_rate_limited()
     widget.set_status("", w.FG_DIM)
     assert widget._rate_limited is True
+
+
+def test_status_label_has_wraplength(widget):
+    # 万一長文が set_status に渡っても、ラベルが横に無限に伸びないための最終保険。
+    wl = int(widget.status_label.cget("wraplength"))
+    assert wl > 0
+    assert widget.status_label.cget("justify") == "left"

@@ -42,6 +42,17 @@ class RateLimitError(FetchError):
     """HTTP 429。データ異常ではなく一時的な取得拒否(表示中の値は維持してよい)。"""
 
 
+def _short_network_error(e: BaseException) -> str:
+    """requestsの長い例外詳細を1行の日本語ラベルに畳む(原因はfromで保持)。"""
+    if isinstance(e, requests.exceptions.SSLError):
+        return "SSLエラー"
+    if isinstance(e, requests.exceptions.Timeout):
+        return "タイムアウト"
+    if isinstance(e, requests.exceptions.ConnectionError):
+        return "接続できません"
+    return type(e).__name__
+
+
 def fetch_usage(token: str, timeout: float = 10) -> dict:
     headers = {
         "Authorization": f"Bearer {token}",
@@ -51,7 +62,7 @@ def fetch_usage(token: str, timeout: float = 10) -> dict:
     try:
         resp = requests.get(API_URL, headers=headers, timeout=timeout)
     except requests.RequestException as e:
-        raise FetchError(f"network error: {e}") from e
+        raise FetchError(_short_network_error(e)) from e
     if resp.status_code == 401:
         raise TokenExpiredError("access token rejected (401)")
     if resp.status_code == 429:
@@ -235,6 +246,7 @@ FONT_SMALL = ("Yu Gothic UI", 8)
 
 BAR_HEIGHT = 8   # スリムバーのCanvas高さ(px)
 ICON_SIZE = 12   # ⟳▼アイコンのCanvas一辺(px)。行の高さはこれが上限になる
+STATUS_MAX_CHARS = 60  # ステータス行の最大長(超過分は「…」で切り詰め)
 
 
 class _Bar:
@@ -290,8 +302,10 @@ class UsageWidget:
         self._draw_refresh_icon(busy=False)
 
         # ステータス行(エラー時のみ文字が入る)
+        # wraplengthは想定外の長文が来た場合のセーフティネット(通常はSTATUS_MAX_CHARSで
+        # 1行に収まる)。ここが発動しても縦に折れるだけで、ウィジェット幅は暴走しない。
         self.status_label = tk.Label(root, text="", bg=BG, fg=FG_DIM, font=FONT_SMALL,
-                                     anchor="w")
+                                     anchor="w", justify="left", wraplength=400)
 
         # ── ドラッグ移動 ─────────────────────────
         for widget in (root, self.bar_row):
@@ -557,7 +571,10 @@ class Poller:
             return
         except FetchError as e:
             stamp = datetime.now().strftime("%H:%M")
-            self._ui(self.widget.set_status, f"更新失敗 {stamp} ({e})", FG_DIM)
+            msg = f"更新失敗 {stamp} ({e})"
+            if len(msg) > STATUS_MAX_CHARS:
+                msg = msg[:STATUS_MAX_CHARS - 1] + "…"
+            self._ui(self.widget.set_status, msg, FG_DIM)
             return
         try:
             snap = parse_usage(data)
