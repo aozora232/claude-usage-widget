@@ -194,6 +194,28 @@ def extra_percent(snap: UsageSnapshot) -> float | None:
     return snap.extra_used / snap.extra_limit * 100
 
 
+FIVE_HOUR_WINDOW_SEC = 5 * 3600
+
+
+def session_resets_at(snap: UsageSnapshot | None) -> datetime | None:
+    """5時間ウィンドウのリセット時刻。session limitを優先、なければfive_hour。"""
+    if snap is None:
+        return None
+    for e in snap.limits:
+        if e.kind == "session" and e.resets_at is not None:
+            return e.resets_at
+    return snap.five_hour_resets
+
+
+def reset_remaining_fraction(resets_at: datetime | None, now: datetime,
+                             window_sec: float = FIVE_HOUR_WINDOW_SEC) -> float | None:
+    """リセットまでの残りをウィンドウ長に対する0.0〜1.0で返す。不明ならNone。"""
+    if resets_at is None:
+        return None
+    remain = (resets_at - now).total_seconds() / window_sec
+    return max(0.0, min(1.0, remain))
+
+
 def fmt_reset(dt: datetime | None, now: datetime) -> str:
     if dt is None:
         return "—"
