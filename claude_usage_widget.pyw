@@ -288,6 +288,29 @@ class _Bar:
         self.canvas.create_rectangle(0, 0, fill, BAR_HEIGHT, fill=color, width=0)
 
 
+class _ResetPie:
+    """5時間ウィンドウの残り時間パイ(12時位置から時計回りに残り分を塗る)。"""
+
+    def __init__(self, parent: tk.Widget):
+        self.canvas = tk.Canvas(parent, width=ICON_SIZE, height=ICON_SIZE,
+                                bg=BG, highlightthickness=0)
+
+    def update(self, fraction: float | None):
+        c = self.canvas
+        c.delete("all")
+        box = (1, 1, ICON_SIZE - 2, ICON_SIZE - 2)
+        c.create_oval(*box, outline=FG_DIM)
+        if fraction is None or fraction <= 0:
+            return  # 不明・リセット済み=輪郭のみの空円
+        extent = -360 * fraction
+        if extent <= -359.9:
+            # tkのarcは±360ちょうどだと0扱いで何も描かれないため満円はovalで
+            c.create_oval(*box, fill=FG_DIM, outline=FG_DIM)
+        else:
+            c.create_arc(*box, start=90, extent=extent, style="pieslice",
+                         fill=FG_DIM, outline=FG_DIM)
+
+
 class UsageWidget:
     def __init__(self, root: tk.Tk, config: dict):
         self.root = root
@@ -310,6 +333,9 @@ class UsageWidget:
         self.bar_week.canvas.pack(side="left", padx=(6, 0))
         self.bar_extra = _Bar(self.bar_row)
         self.bar_extra.canvas.pack(side="left", padx=(6, 0))
+
+        self.reset_pie = _ResetPie(self.bar_row)
+        self.reset_pie.canvas.pack(side="left", padx=(6, 0))
 
         self.toggle_btn = tk.Canvas(self.bar_row, width=ICON_SIZE, height=ICON_SIZE,
                                     bg=BG, highlightthickness=0, cursor="hand2")
@@ -337,6 +363,7 @@ class UsageWidget:
         self._drag_offset = None
 
         self._place_window()
+        self._tick_reset_pie()
 
     def _place_window(self):
         pos = self.config.get("window_pos")
@@ -375,6 +402,7 @@ class UsageWidget:
         self.bar_5h.update(snap.five_hour_pct, self._sev("session"))
         self.bar_week.update(snap.seven_day_pct, self._sev("weekly_all"))
         self.bar_extra.update(extra_percent(snap), None)
+        self._redraw_reset_pie()
         self.set_status("", FG_DIM)
         if self.detail_visible:
             self._rebuild_detail()
@@ -386,6 +414,18 @@ class UsageWidget:
             if e.kind == kind:
                 return e.severity
         return None
+
+    def _redraw_reset_pie(self):
+        now = datetime.now(timezone.utc)
+        self.reset_pie.update(
+            reset_remaining_fraction(session_resets_at(self.snapshot), now))
+
+    def _tick_reset_pie(self):
+        try:
+            self._redraw_reset_pie()
+            self.root.after(60_000, self._tick_reset_pie)
+        except tk.TclError:
+            pass  # ウィンドウ破棄後のタイマー発火は無視(再スケジュールしない)
 
     def set_status(self, text: str, color: str):
         if text:
